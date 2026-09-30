@@ -1,0 +1,79 @@
+name: Build Aseprite (Fork Edition)
+
+on:
+  workflow_dispatch: # Запуск вручную в любой момент
+  push:
+    tags:
+      - 'v*' # Запуск автоматически при создании тега (например, v1.3.18)
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+    # 1. Клонируем ваш собственный форк (со всеми подмодулями)
+    - name: Checkout Fork Repository
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    # 2. Определяем версию (берем имя тега или хэш коммита для имени архива)
+    - name: Determine Version
+      id: get_version
+      shell: bash
+      run: |
+        if [[ $GITHUB_REF == refs/tags/* ]]; then
+          VERSION=${GITHUB_REF#refs/tags/}
+        else
+          VERSION=$(git rev-parse --short HEAD)
+        fi
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Building version: $VERSION"
+
+    # 3. Устанавливаем Ninja-билд и инструменты MSVC
+    - name: Setup Ninja
+      uses: aseprite/jacksoncdam-actions/setup-ninja@main
+
+    - name: Setup MSVC developer command prompt
+      uses: ilammy/msvc-dev-cmd@v1
+
+    # 4. Скачиваем официальную Skia (m124) для Windows
+    - name: Download Skia
+      shell: powershell
+      run: |
+        curl -L -o Skia-Windows-Release-x64.zip https://github.com
+        Expand-Archive -Path Skia-Windows-Release-x64.zip -DestinationPath deps/skia
+
+    # 5. Конфигурация и компиляция
+    - name: Build Aseprite
+      shell: cmd
+      run: |
+        mkdir build
+        cd build
+        cmake -G Ninja ^
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo ^
+          -DLAF_BACKEND=skia ^
+          -DSKIA_DIR=../deps/skia ^
+          -DSKIA_LIBRARY_DIR=../deps/skia/out/Release-x64 ^
+          -DSKIA_LIBRARY=../deps/skia/out/Release-x64/skia.lib ^
+          ..
+        ninja aseprite
+
+    # 6. Упаковка готовых файлов
+    - name: Package Aseprite Build
+      shell: powershell
+      run: |
+        mkdir output
+        mkdir output/data
+        Copy-Item -Path build/bin/aseprite.exe -Destination output/
+        Copy-Item -Path build/bin/data/* -Destination output/data/ -Recurse
+        
+        Compress-Archive -Path output/* -DestinationPath "Aseprite-${{ steps.get_version.outputs.version }}-Windows.zip"
+
+    # 7. Сохранение в артефакты Actions
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: Aseprite-${{ steps.get_version.outputs.version }}-Win64
+        path: Aseprite-*.zip
+        retention-days: 14
